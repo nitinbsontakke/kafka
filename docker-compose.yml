@@ -2,7 +2,6 @@ version: '3.8'
 
 services:
 
-
   # ----------------------------
   # PRIMARY KAFKA (KRaft)
   # ----------------------------
@@ -40,20 +39,23 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
 
   # ----------------------------
-  # MIRRORMAKER 2 (CUSTOM IMAGE)
+  # MIRRORMAKER 2 (CUSTOM)
   # ----------------------------
   mm2:
-    image: kafka-mirror-maker:latest  # if you have built the image already
+    image: kafka-mirror-maker:latest
     container_name: mm2
     depends_on:
       - primary-kafka
       - standby-kafka
-    volumes:
-      - ./config/mm2.properties:/kafka/config/mm2.properties
-    command: ["bin/connect-mirror-maker.sh", "/kafka/config/mm2.properties"]
-    # command: ["sh", "-c", "until nc -z primary-kafka 9092; do sleep 1; done; /kafka/config/mm2.properties"]
+    command: >
+      sh -c "
+      echo 'Waiting for Kafka...';
+      sleep 20;
+      /opt/kafka/bin/connect-mirror-maker.sh /opt/kafka/config/mm2.properties
+      "
+
   # ----------------------------
-  # PRODUCER (CUSTOM IMAGE)
+  # PRODUCER (CUSTOM)
   # ----------------------------
   producer:
     image: producer:latest

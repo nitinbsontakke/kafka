@@ -4,7 +4,7 @@ FROM eclipse-temurin:17-jdk
 WORKDIR /app
 
 # Copy your fat jar (must include all dependencies)
-COPY build/libs/event-1.0.0.jar app.jar
+COPY build/libs/*.jar /app/app.jar
 
 # Run the jar
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

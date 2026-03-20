@@ -20,3 +20,7 @@ docker-compose up
 
 #for producer
 docker build -f Producer/Dockerfile/dockerfile -t producer:latest .
+
+
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+export PATH=$JAVA_HOME/bin:$PATH

@@ -16,22 +16,19 @@ dependencies {
 }
 
 application {
-    mainClass = 'com.example.ProducerApp' // must match your package
+    mainClass = 'ProducerApp'
 }
 
-// Task to create a fat JAR
 jar {
     manifest {
         attributes(
-            'Main-Class': 'com.example.ProducerApp' // must match your main class
+            'Main-Class': 'ProducerApp'
         )
     }
 
-    // Include all runtime dependencies
     from {
         configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
     }
 
-    // Handle duplicate files in dependencies
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

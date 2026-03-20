@@ -2,47 +2,87 @@
 
 set -e
 
+docker-compose down
+
+docker-compose up 
+
 echo "=== Starting Kafka environment ==="
 
-
-# Wait for brokers to be ready
 echo "Waiting for Kafka brokers to start..."
-sleep 20
+sleep 25
 
+# ----------------------------
+# Ensure topic exists
+# ----------------------------
+echo "Creating topic commit-log (if not exists)..."
+docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server primary-kafka:9092 \
+  --create --if-not-exists \
+  --topic commit-log \
+  --partitions 1 \
+  --replication-factor 1"
+
+# ----------------------------
+# Scenario 1
+# ----------------------------
 echo "=== Scenario 1: Normal Replication ==="
-echo "Producing 1000 messages to primary commit-log..."
-docker exec -i producer sh -c "java -jar ProducerApp.jar --count 1000"
+echo "Producing 1000 messages..."
 
-echo "Waiting 10s for MirrorMaker 2 to replicate..."
+docker exec producer sh -c "java -jar /app/app.jar --count 1000"
+
+echo "Waiting for replication..."
 sleep 10
 
-echo "Check MirrorMaker 2 logs for replication..."
-docker logs enhanced-mm2 --tail 50
+echo "MM2 logs:"
+docker logs mm2 --tail 50
 
-echo "=== Scenario 2: Log Truncation / Fail-Fast Simulation ==="
-echo "Triggering truncation (simulated by reducing retention to 5s)..."
-docker exec -i primary-kafka sh -c "kafka-configs --bootstrap-server primary-kafka:9092 --entity-type topics --entity-name commit-log --alter --add-config retention.ms=5000"
+# ----------------------------
+# Scenario 2
+# ----------------------------
+echo "=== Scenario 2: Log Truncation ==="
 
-echo "Producing 50 more messages..."
-docker exec -i producer sh -c "java -jar ProducerApp.jar --count 50"
+echo "Reducing retention to 5 seconds..."
+docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-configs.sh \
+  --bootstrap-server primary-kafka:9092 \
+  --entity-type topics \
+  --entity-name commit-log \
+  --alter --add-config retention.ms=5000"
 
-sleep 7
+echo "Producing 50 messages..."
+docker exec producer sh -c "java -jar /app/app.jar --count 50"
 
-echo "Check MirrorMaker 2 logs for fail-fast detection..."
-docker logs enhanced-mm2 --tail 50
+echo "Waiting for truncation..."
+sleep 10
 
-echo "=== Scenario 3: Topic Reset Simulation ==="
-echo "Deleting and recreating commit-log topic..."
-docker exec -i primary-kafka sh -c "kafka-topics --bootstrap-server primary-kafka:9092 --delete --topic commit-log"
-sleep 3
-docker exec -i primary-kafka sh -c "kafka-topics --bootstrap-server primary-kafka:9092 --create --topic commit-log --partitions 1 --replication-factor 1"
+echo "MM2 logs (expect fail-fast):"
+docker logs mm2 --tail 50
 
-echo "Producing 20 messages after reset..."
-docker exec -i producer sh -c "java -jar ProducerApp.jar --count 20"
+# ----------------------------
+# Scenario 3
+# ----------------------------
+echo "=== Scenario 3: Topic Reset ==="
+
+echo "Deleting topic..."
+docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server primary-kafka:9092 \
+  --delete --topic commit-log"
 
 sleep 5
 
-echo "Check MirrorMaker 2 logs for automatic recovery..."
-docker logs enhanced-mm2 --tail 50
+echo "Recreating topic..."
+docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server primary-kafka:9092 \
+  --create \
+  --topic commit-log \
+  --partitions 1 \
+  --replication-factor 1"
+
+echo "Producing 20 messages..."
+docker exec producer sh -c "java -jar /app/app.jar --count 20"
+
+sleep 10
+
+echo "MM2 logs (expect recovery):"
+docker logs mm2 --tail 50
 
 echo "=== All scenarios complete ==="

@@ -1,25 +1,19 @@
-FROM apache/kafka:4.0.0
+FROM eclipse-temurin:17-jdk-jammy
 
-WORKDIR /kafka
+# Set Kafka home
+ENV KAFKA_HOME=/opt/kafka
+ENV PATH=$KAFKA_HOME/bin:$PATH
 
-ENV CLASSPATH=/kafka/libs/*
-# Copy your custom MM2 jar to override
-COPY Kafka/kafka/core/build/libs/*.jar   /kafka/libs/
-COPY Kafka/kafka/clients/build/libs/*.jar /kafka/libs/
-COPY Kafka/kafka/connect/build/libs/*.jar /kafka/libs/
-COPY Kafka/kafka/connect/mirror/build/libs/*.jar /kafka/libs/
-COPY Kafka/kafka/connect/basic-auth-extension/build/libs/*.jar /kafka/libs/
-COPY Kafka/kafka/connect/basic-auth-extension/build/dependant-libs/*.jar /kafka/libs/
-COPY Kafka/kafka/connect/api/build/dependant-libs/*.jar /kafka/libs/
-COPY Kafka/kafka/connect/api/build/libs/*.jar /kafka/libs/
+# Copy your built Kafka distribution
+COPY Kafka/kafka/core/build/distributions/kafka_2.13-4.0.0.tgz /opt/
 
-# Copy Kafka scripts
-COPY Kafka/kafka/bin/connect-mirror-maker.sh /kafka/bin/connect-mirror-maker.sh
+# Extract Kafka
+RUN cd /opt && tar -xzf kafka_2.13-4.0.0.tgz && mv kafka_2.13-4.0.0 kafka
 
+# Copy MM2 config
+COPY config/mm2.properties /opt/kafka/config/mm2.properties
 
-# Copy your config
-COPY config/mm2.properties /kafka/config/
+WORKDIR /opt/kafka
 
 # Run MirrorMaker 2
-ENTRYPOINT ["bin/connect-mirror-maker.sh"]
-CMD ["/kafka/config/mm2.properties"]
+CMD ["bin/connect-mirror-maker.sh", "config/mm2.properties"]
