@@ -49,8 +49,14 @@ services:
       - standby-kafka
     command: >
       sh -c "
-      echo 'Waiting for Kafka...';
-      sleep 20;
+      echo 'Waiting for primary-kafka API...';
+      until /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server primary-kafka:9092 > /dev/null 2>&1; do sleep 1; done;
+      echo 'Waiting for standby-kafka API...';
+      until /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server standby-kafka:9094 > /dev/null 2>&1; do sleep 1; done;
+      echo 'Verifying cluster readiness...';
+      until /opt/kafka/bin/kafka-topics.sh --bootstrap-server primary-kafka:9092 --list > /dev/null 2>&1; do sleep 1; done;
+      until /opt/kafka/bin/kafka-topics.sh --bootstrap-server standby-kafka:9094 --list > /dev/null 2>&1; do sleep 1; done;
+      echo 'Kafka services are ready, starting MirrorMaker 2.';
       /opt/kafka/bin/connect-mirror-maker.sh /opt/kafka/config/mm2.properties
       "
 
@@ -64,4 +70,4 @@ services:
       - primary-kafka
     environment:
       BOOTSTRAP_SERVERS: primary-kafka:9092
-    command: ["java", "-jar", "/app/app.jar"]
+    command: ["sleep", "infinity"]   # 👈 IMPORTANT

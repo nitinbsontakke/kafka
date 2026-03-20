@@ -10,6 +10,9 @@ COPY Kafka/kafka/core/build/distributions/kafka_2.13-4.0.0.tgz /opt/
 # Extract Kafka
 RUN cd /opt && tar -xzf kafka_2.13-4.0.0.tgz && mv kafka_2.13-4.0.0 kafka
 
+# Install netcat for readiness probe
+RUN apt-get update && apt-get install -y netcat && rm -rf /var/lib/apt/lists/*
+
 # Copy MM2 config
 COPY config/mm2.properties /opt/kafka/config/mm2.properties
 
