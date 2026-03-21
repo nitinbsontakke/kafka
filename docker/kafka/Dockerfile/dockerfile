@@ -1,22 +1,16 @@
 FROM eclipse-temurin:17-jdk-jammy
 
-# Set Kafka home
 ENV KAFKA_HOME=/opt/kafka
 ENV PATH=$KAFKA_HOME/bin:$PATH
 
-# Copy your built Kafka distribution
 COPY Kafka/kafka/core/build/distributions/kafka_2.13-4.0.0.tgz /opt/
 
-# Extract Kafka
 RUN cd /opt && tar -xzf kafka_2.13-4.0.0.tgz && mv kafka_2.13-4.0.0 kafka
 
-# Install netcat for readiness probe
 RUN apt-get update && apt-get install -y netcat && rm -rf /var/lib/apt/lists/*
 
-# Copy MM2 config
 COPY config/mm2.properties /opt/kafka/config/mm2.properties
 
 WORKDIR /opt/kafka
 
-# Run MirrorMaker 2
-CMD ["bin/connect-mirror-maker.sh", "config/mm2.properties"]
+CMD ["sh", "-c", "echo 'Waiting for Kafka...' && while ! nc -z primary-kafka 9092; do sleep 2; done && while ! nc -z standby-kafka 9092; do sleep 2; done && echo 'Starting MirrorMaker 2...' && bin/connect-mirror-maker.sh config/mm2.properties"]

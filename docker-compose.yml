@@ -2,9 +2,6 @@ version: '3.8'
 
 services:
 
-  # ----------------------------
-  # PRIMARY KAFKA (KRaft)
-  # ----------------------------
   primary-kafka:
     image: apache/kafka:4.0.0
     container_name: primary-kafka
@@ -13,61 +10,46 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://primary-kafka:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@primary-kafka:9093
-      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_MS: 60000 
 
-  # ----------------------------
-  # STANDBY KAFKA (KRaft)
-  # ----------------------------
+      # ✅ Required for single-node KRaft
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
   standby-kafka:
     image: apache/kafka:4.0.0
     container_name: standby-kafka
     ports:
-      - "9094:9094"
+      - "9094:9092"
     environment:
       KAFKA_NODE_ID: 2
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9094,CONTROLLER://:9095
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://standby-kafka:9094
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9095
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://standby-kafka:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 2@standby-kafka:9095
-      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
 
-  # ----------------------------
-  # MIRRORMAKER 2 (CUSTOM)
-  # ----------------------------
-  mm2:
-    image: kafka-mirror-maker:latest
+      # ✅ Required for single-node KRaft
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  mirror-maker:
+    image: enhanced-mirror-maker2
     container_name: mm2
     depends_on:
       - primary-kafka
       - standby-kafka
-    command: >
-      sh -c "
-      echo 'Waiting for primary-kafka API...';
-      until /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server primary-kafka:9092 > /dev/null 2>&1; do sleep 1; done;
-      echo 'Waiting for standby-kafka API...';
-      until /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server standby-kafka:9094 > /dev/null 2>&1; do sleep 1; done;
-      echo 'Verifying cluster readiness...';
-      until /opt/kafka/bin/kafka-topics.sh --bootstrap-server primary-kafka:9092 --list > /dev/null 2>&1; do sleep 1; done;
-      until /opt/kafka/bin/kafka-topics.sh --bootstrap-server standby-kafka:9094 --list > /dev/null 2>&1; do sleep 1; done;
-      echo 'Kafka services are ready, starting MirrorMaker 2.';
-      /opt/kafka/bin/connect-mirror-maker.sh /opt/kafka/config/mm2.properties
-      "
-
-  # ----------------------------
-  # PRODUCER (CUSTOM)
-  # ----------------------------
-  producer:
-    image: producer:latest
-    container_name: producer
-    depends_on:
-      - primary-kafka
-    environment:
-      BOOTSTRAP_SERVERS: primary-kafka:9092
-    command: ["sleep", "infinity"]   # 👈 IMPORTANT

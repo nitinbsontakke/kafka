@@ -8,3 +8,5 @@ COPY build/libs/*.jar /app/app.jar
 
 # Run the jar
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+
+CMD ["--count", "100"]

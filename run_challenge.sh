@@ -2,19 +2,52 @@
 
 set -e
 
-docker-compose down
-
-docker-compose up 
-
-echo "=== Starting Kafka environment ==="
-
-echo "Waiting for Kafka brokers to start..."
-sleep 25
+echo "=== 🚀 MM2 Test Script (On-demand Producer) ==="
 
 # ----------------------------
-# Ensure topic exists
+# Detect docker network
 # ----------------------------
-echo "Creating topic commit-log (if not exists)..."
+NETWORK=$(docker inspect primary-kafka \
+  --format='{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+
+echo "🌐 Using Docker network: $NETWORK"
+
+# ----------------------------
+# Wait for Kafka brokers
+# ----------------------------
+echo "⏳ Waiting for primary Kafka..."
+
+until docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh --bootstrap-server primary-kafka:9092 --list" >/dev/null 2>&1; do
+  echo "Primary Kafka not ready..."
+  sleep 5
+done
+
+echo "⏳ Waiting for standby Kafka..."
+
+until docker exec standby-kafka sh -c "/opt/kafka/bin/kafka-topics.sh --bootstrap-server standby-kafka:9092 --list" >/dev/null 2>&1; do
+  echo "Standby Kafka not ready..."
+  sleep 5
+done
+
+echo "✅ Kafka clusters are ready"
+
+# ----------------------------
+# Wait for MM2
+# ----------------------------
+echo "⏳ Waiting for MirrorMaker2..."
+
+until docker logs mm2 2>&1 | grep -q "Herder started"; do
+  echo "MM2 not ready..."
+  sleep 5
+done
+
+echo "✅ MirrorMaker2 is running"
+
+# ----------------------------
+# Create topic
+# ----------------------------
+echo "📌 Creating topic: commit-log"
+
 docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server primary-kafka:9092 \
   --create --if-not-exists \
@@ -23,53 +56,110 @@ docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --replication-factor 1"
 
 # ----------------------------
-# Scenario 1
+# Helper: Run producer
 # ----------------------------
-echo "=== Scenario 1: Normal Replication ==="
-echo "Producing 1000 messages..."
+run_producer() {
+  COUNT=$1
+  echo "📤 Producing $COUNT messages..."
 
-docker exec producer sh -c "java -jar /app/app.jar --count 1000"
-
-echo "Waiting for replication..."
-sleep 10
-
-echo "MM2 logs:"
-docker logs mm2 --tail 50
+  docker run --rm --network $NETWORK \
+    commit-log-producer \
+    java -jar /app/app.jar --count $COUNT
+}
 
 # ----------------------------
-# Scenario 2
+# Scenario 1: Normal Replication
 # ----------------------------
-echo "=== Scenario 2: Log Truncation ==="
+echo ""
+echo "==============================="
+echo "✅ Scenario 1: Normal Replication"
+echo "==============================="
 
-echo "Reducing retention to 5 seconds..."
+run_producer 100
+
+sleep 5
+
+echo "⏳ Waiting for topic replication in standby..."
+
+until docker exec standby-kafka sh -c \
+  "/opt/kafka/bin/kafka-topics.sh --bootstrap-server standby-kafka:9092 --list | grep primary.commit-log" >/dev/null 2>&1
+  do
+    echo "Topic not replicated yet..."
+    sleep 3
+done
+
+echo "✅ Topic replicated"
+
+echo "📥 Consuming from standby..."
+
+docker exec standby-kafka sh -c "/opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server standby-kafka:9092 \
+  --topic primary.commit-log \
+  --from-beginning \
+  --timeout-ms 10000 \
+  --max-messages 100"
+
+echo "✅ Scenario 1 completed"
+
+# ----------------------------
+# Scenario 2: Log Truncation
+# ----------------------------
+
+
+echo "⏸️ Stopping MirrorMaker2..."
+docker stop mm2
+
+echo "⏳ Setting retention to 60 sec..."
 docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-configs.sh \
   --bootstrap-server primary-kafka:9092 \
   --entity-type topics \
   --entity-name commit-log \
-  --alter --add-config retention.ms=5000"
+  --alter --add-config retention.ms=60000"
 
-echo "Producing 50 messages..."
-docker exec producer sh -c "java -jar /app/app.jar --count 50"
+echo "📤 Producing 100 messages (MM2 is stopped)..."
+docker run --rm --network $NETWORK commit-log-producer \
+  java -jar /app/app.jar --count 100
 
-echo "Waiting for truncation..."
+echo "⏳ Waiting for retention cleanup..."
+sleep 70
+
+echo "▶️ Restarting MirrorMaker2..."
+docker start mm2
+
+echo "⏳ Waiting for MM2 recovery..."
 sleep 10
 
-echo "MM2 logs (expect fail-fast):"
+echo "📄 MM2 logs (expect offset reset / truncation):"
 docker logs mm2 --tail 50
-
 # ----------------------------
-# Scenario 3
+# Scenario 3: Topic Reset
 # ----------------------------
-echo "=== Scenario 3: Topic Reset ==="
+echo ""
+echo "==============================="
+echo "🔥 Scenario 3: Topic Reset"
+echo "==============================="
 
-echo "Deleting topic..."
+
+run_producer 100
+
+sleep 5
+
+echo "🗑️ Deleting topic..."
 docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server primary-kafka:9092 \
   --delete --topic commit-log"
 
-sleep 5
+echo "⏳ Waiting for topic deletion to complete..."
 
-echo "Recreating topic..."
+# Wait until topic disappears
+while docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh --bootstrap-server primary-kafka:9092 --list" | grep -q "commit-log"; do
+  echo "Topic still exists... waiting"
+  sleep 3
+done
+
+echo "✅ Topic deleted"
+
+echo "♻️ Recreating topic..."
 docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server primary-kafka:9092 \
   --create \
@@ -77,12 +167,19 @@ docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --partitions 1 \
   --replication-factor 1"
 
-echo "Producing 20 messages..."
-docker exec producer sh -c "java -jar /app/app.jar --count 20"
-
+echo "⏳ Waiting..."
 sleep 10
 
-echo "MM2 logs (expect recovery):"
+echo "📥 Consuming after reset..."
+
+docker exec standby-kafka sh -c "/opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server standby-kafka:9092 \
+  --topic primary.commit-log \
+  --from-beginning \
+  --max-messages 100"
+
+echo "📄 MM2 logs (recovery expected):"
 docker logs mm2 --tail 50
 
-echo "=== All scenarios complete ==="
+echo ""
+echo "🎉 ALL TEST SCENARIOS COMPLETED SUCCESSFULLY"

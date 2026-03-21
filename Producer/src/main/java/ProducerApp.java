@@ -12,27 +12,48 @@ import java.util.Map;
 public class ProducerApp {
 
     private static final String TOPIC = "commit-log";
-    private static final String BOOTSTRAP_SERVERS = "primary-kafka:9092";
 
     public static void main(String[] args) throws Exception {
 
+        // 🔹 Read count from CLI args
+        int count = 100;
+        if (args.length >= 2 && args[0].equals("--count")) {
+            count = Integer.parseInt(args[1]);
+        }
+
+        // 🔹 Read bootstrap servers from ENV (fallback default)
+        String bootstrapServers = System.getenv()
+                .getOrDefault("BOOTSTRAP_SERVERS", "primary-kafka:9092");
+
+        // 🔹 Kafka Producer Config
         Properties props = new Properties();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
 
-        // Reliability configs (important for your replication testing)
+        // 🔹 Reliability configs (important for replication testing)
         props.put(ProducerConfig.ACKS_CONFIG, "all");
         props.put(ProducerConfig.RETRIES_CONFIG, 3);
+
+        // 🔹 Idempotence (avoid duplicates)
+        props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
+        props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
+
+        // 🔹 Timeout configs
+        props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 120000);
+        props.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 30000);
 
         KafkaProducer<String, String> producer = new KafkaProducer<>(props);
         ObjectMapper objectMapper = new ObjectMapper();
 
         System.out.println("🚀 Starting Commit Log Producer...");
+        System.out.println("📌 Target topic: " + TOPIC);
+        System.out.println("📌 Bootstrap servers: " + bootstrapServers);
+        System.out.println("📌 Event count: " + count);
 
-        for (int i = 1; i <= 1000; i++) {
+        for (int i = 1; i <= count; i++) {
 
-            // Build JSON event
+            // 🔹 Build JSON event
             Map<String, Object> event = new HashMap<>();
             event.put("event_id", UUID.randomUUID().toString());
             event.put("timestamp", Instant.now().getEpochSecond());
@@ -50,28 +71,32 @@ public class ProducerApp {
             ProducerRecord<String, String> record =
                     new ProducerRecord<>(TOPIC, key, json);
 
-            // Send async with callback
+            int eventNumber = i;
+
+            // 🔹 Async send with callback
             producer.send(record, (metadata, exception) -> {
                 if (exception == null) {
                     System.out.println(
-                        "✅ Produced event -> " +
-                        "partition=" + metadata.partition() +
+                        "✅ Event#" + eventNumber +
+                        " -> partition=" + metadata.partition() +
                         ", offset=" + metadata.offset() +
-                        ", key=" + key +
-                        ", payload=" + json
+                        ", key=" + key
                     );
                 } else {
-                    System.err.println("❌ Failed to produce event: " + exception.getMessage());
+                    System.err.println(
+                        "❌ Event#" + eventNumber +
+                        " failed: " + exception.getMessage()
+                    );
                 }
             });
 
-            // Small delay (helps in observing logs + MM2 behavior)
-            Thread.sleep(10);
+            // 🔹 Small delay (useful for observing MM2 + logs)
+            Thread.sleep(50);
         }
 
         producer.flush();
         producer.close();
 
-        System.out.println("🎯 Finished producing 1000 events.");
+        System.out.println("🎯 Finished producing " + count + " events.");
     }
 }
