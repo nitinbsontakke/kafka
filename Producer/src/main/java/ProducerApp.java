@@ -16,7 +16,7 @@ public class ProducerApp {
     public static void main(String[] args) throws Exception {
 
         // 🔹 Read count from CLI args
-        int count = 100;
+        int count = 20;
         if (args.length >= 2 && args[0].equals("--count")) {
             count = Integer.parseInt(args[1]);
         }

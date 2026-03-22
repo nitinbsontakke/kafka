@@ -75,7 +75,7 @@ echo "==============================="
 echo "✅ Scenario 1: Normal Replication"
 echo "==============================="
 
-run_producer 100
+run_producer 20
 
 sleep 5
 
@@ -97,69 +97,86 @@ docker exec standby-kafka sh -c "/opt/kafka/bin/kafka-console-consumer.sh \
   --topic primary.commit-log \
   --from-beginning \
   --timeout-ms 10000 \
-  --max-messages 100"
+  --max-messages 20"
+
+echo "Replication done"
+
+docker exec standby-kafka sh -c "/opt/kafka/bin/kafka-topics.sh --bootstrap-server standby-kafka:9092 --list"
 
 echo "✅ Scenario 1 completed"
 
-# ----------------------------
-# Scenario 2: Log Truncation
-# ----------------------------
+echo "Checking.. if topics are present in primary kafka"
+
+docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh --bootstrap-server primary-kafka:9092 --list"
+
+echo "Breakpoint: press Enter to continue"
+read -r
 
 
-echo "⏸️ Stopping MirrorMaker2..."
-docker stop mm2
+echo ""
+echo "==============================="
+echo "🔥 Scenario 2: Log Truncation (No MM2 Stop)"
+echo "==============================="
 
-echo "⏳ Setting retention to 60 sec..."
+# Step 1: Set very low retention
+echo "⏳ Setting aggressive retention (10 sec)..."
+
 docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-configs.sh \
   --bootstrap-server primary-kafka:9092 \
   --entity-type topics \
   --entity-name commit-log \
-  --alter --add-config retention.ms=60000"
+  --alter --add-config retention.ms=10000"
 
-echo "📤 Producing 100 messages (MM2 is stopped)..."
-docker run --rm --network $NETWORK commit-log-producer \
-  java -jar /app/app.jar --count 100
-
-echo "⏳ Waiting for retention cleanup..."
-sleep 70
-
-echo "▶️ Restarting MirrorMaker2..."
-docker start mm2
-
-echo "⏳ Waiting for MM2 recovery..."
-sleep 10
-
-echo "📄 MM2 logs (expect offset reset / truncation):"
-docker logs mm2 --tail 50
-# ----------------------------
-# Scenario 3: Topic Reset
-# ----------------------------
-echo ""
-echo "==============================="
-echo "🔥 Scenario 3: Topic Reset"
-echo "==============================="
-
+# Step 2: Produce large data to create lag
+echo "📤 Producing 100 messages..."
 
 run_producer 100
 
+# Step 3: Let MM2 process partially
+echo "⏳ Letting MM2 consume partially..."
 sleep 5
 
-echo "🗑️ Deleting topic..."
+# Step 4: Produce more to push offsets forward
+echo "📤 Producing more messages to create offset gap..."
+
+run_producer 100
+
+# Step 5: Wait for retention cleanup
+echo "⏳ Waiting for log cleanup..."
+sleep 20
+
+# Step 6: Observe logs
+echo "📄 Checking MM2 logs (expect truncation)..."
+
+docker logs mm2 --tail 100 | grep -E "TRUNCATION|OffsetOutOfRange"
+
+echo "✅ Scenario 2 completed"
+
+echo ""
+echo "==============================="
+echo "🔥 Scenario 3: Topic Reset (No MM2 Stop)"
+echo "==============================="
+
+# Step 1: Produce initial data
+echo "📤 Producing initial messages..."
+run_producer 50
+
+sleep 5
+
+# Step 2: Delete topic while MM2 is running
+echo "🗑️ Deleting topic while MM2 is active..."
+
 docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server primary-kafka:9092 \
   --delete --topic commit-log"
 
-echo "⏳ Waiting for topic deletion to complete..."
+# Step 3: Wait for deletion detection
+echo "⏳ Waiting for MM2 to detect deletion..."
+sleep 10
 
-# Wait until topic disappears
-while docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh --bootstrap-server primary-kafka:9092 --list" | grep -q "commit-log"; do
-  echo "Topic still exists... waiting"
-  sleep 3
-done
-
-echo "✅ Topic deleted"
-
+# Step 4: Recreate topic
 echo "♻️ Recreating topic..."
+
 docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server primary-kafka:9092 \
   --create \
@@ -167,10 +184,16 @@ docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --partitions 1 \
   --replication-factor 1"
 
-echo "⏳ Waiting..."
+# Step 5: Wait for reassignment
+echo "⏳ Waiting for reassignment..."
 sleep 10
 
-echo "📥 Consuming after reset..."
+# Step 6: Produce new data
+echo "📤 Producing new messages after reset..."
+run_producer 50
+
+# Step 7: Consume from standby
+echo "📥 Verifying replication after reset..."
 
 docker exec standby-kafka sh -c "/opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server standby-kafka:9092 \
@@ -178,8 +201,9 @@ docker exec standby-kafka sh -c "/opt/kafka/bin/kafka-console-consumer.sh \
   --from-beginning \
   --max-messages 100"
 
-echo "📄 MM2 logs (recovery expected):"
-docker logs mm2 --tail 50
+# Step 8: Check logs
+echo "📄 Checking MM2 logs (expect reset detection)..."
 
-echo ""
-echo "🎉 ALL TEST SCENARIOS COMPLETED SUCCESSFULLY"
+docker logs mm2 --tail 100 | grep -E "RESET|RECREATED|assignment"
+
+echo "✅ Scenario 3 completed"

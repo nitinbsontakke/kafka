@@ -195,3 +195,26 @@ If you want next step, I can:
 ✅ Modify your test script to guarantee exception trigger
 ✅ Help you create demo logs (very important for interviewer)
 ✅ Simulate real offset gap scenario properly
+
+
+//delete topics 
+docker exec primary-kafka kafka-topics.sh --delete --topic commit-log --bootstrap-server primary-kafka:9092
+docker exec standby-kafka kafka-topics.sh --delete --topic primary.commit-log --bootstrap-server standby-kafka:9092
+
+
+
+
+
+//this is for checking if our jar is present.
+docker exec -it mm2 bash
+ls /opt/kafka/libs | grep mirror
+
+
+
+
+
+
+
+
+
+
