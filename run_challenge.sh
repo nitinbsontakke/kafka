@@ -2,6 +2,13 @@
 
 set -e
 
+LOG_FILE="/tmp/mm2.log"
+
+capture_logs() {
+  echo "📡 Capturing MM2 logs..."
+  docker logs mm2 --since 10s > "$LOG_FILE" 2>&1
+}
+
 echo "=== 🚀 MM2 Test Script (On-demand Producer) ==="
 
 # ----------------------------
@@ -64,7 +71,7 @@ run_producer() {
 
   docker run --rm --network $NETWORK \
     commit-log-producer \
-    java -jar /app/app.jar --count $COUNT
+    --count $COUNT
 }
 
 # ----------------------------
@@ -112,71 +119,63 @@ docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh --bootstrap-serv
 echo "Breakpoint: press Enter to continue"
 read -r
 
-
 echo ""
 echo "==============================="
-echo "🔥 Scenario 2: Log Truncation (No MM2 Stop)"
+echo "🔥 Scenario 2: Log Truncation (Verify Custom Logs)"
 echo "==============================="
 
-# Step 1: Set very low retention
 echo "⏳ Setting aggressive retention (10 sec)..."
-
 docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-configs.sh \
   --bootstrap-server primary-kafka:9092 \
   --entity-type topics \
   --entity-name commit-log \
   --alter --add-config retention.ms=10000"
 
-# Step 2: Produce large data to create lag
-echo "📤 Producing 100 messages..."
+echo "📤 Producing 500 messages..."
+run_producer 500
 
-run_producer 100
-
-# Step 3: Let MM2 process partially
-echo "⏳ Letting MM2 consume partially..."
 sleep 5
 
-# Step 4: Produce more to push offsets forward
-echo "📤 Producing more messages to create offset gap..."
+echo "📤 Producing more messages..."
+run_producer 500
 
-run_producer 100
-
-# Step 5: Wait for retention cleanup
-echo "⏳ Waiting for log cleanup..."
+echo "⏳ Waiting for truncation..."
 sleep 20
 
-# Step 6: Observe logs
-echo "📄 Checking MM2 logs (expect truncation)..."
+# 🔍 Capture logs
+capture_logs
 
-docker logs mm2 --tail 100 | grep -E "TRUNCATION|OffsetOutOfRange"
+echo "📄 Checking for YOUR truncation log..."
 
-echo "✅ Scenario 2 completed"
+if grep -q "LOG TRUNCATION DETECTED" "$LOG_FILE"; then
+  echo "✅ PASS: Your truncation log is printed"
+  grep "LOG TRUNCATION DETECTED" "$LOG_FILE"
+else
+  echo "❌ FAIL: Your truncation log NOT found"
+  echo "---- MM2 LOGS ----"
+  tail -n 100 "$LOG_FILE"
+  exit 1
+fi
+
 
 echo ""
 echo "==============================="
-echo "🔥 Scenario 3: Topic Reset (No MM2 Stop)"
+echo "🔥 Scenario 3: Topic Reset (Verify Custom Logs)"
 echo "==============================="
 
-# Step 1: Produce initial data
 echo "📤 Producing initial messages..."
-run_producer 50
+run_producer 500
 
 sleep 5
 
-# Step 2: Delete topic while MM2 is running
-echo "🗑️ Deleting topic while MM2 is active..."
-
+echo "🗑️ Deleting topic..."
 docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server primary-kafka:9092 \
   --delete --topic commit-log"
 
-# Step 3: Wait for deletion detection
-echo "⏳ Waiting for MM2 to detect deletion..."
 sleep 10
 
-# Step 4: Recreate topic
 echo "♻️ Recreating topic..."
-
 docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server primary-kafka:9092 \
   --create \
@@ -184,26 +183,34 @@ docker exec primary-kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --partitions 1 \
   --replication-factor 1"
 
-# Step 5: Wait for reassignment
-echo "⏳ Waiting for reassignment..."
 sleep 10
 
-# Step 6: Produce new data
-echo "📤 Producing new messages after reset..."
-run_producer 50
+echo "📤 Producing new messages..."
+run_producer 500
 
-# Step 7: Consume from standby
-echo "📥 Verifying replication after reset..."
+sleep 10
 
-docker exec standby-kafka sh -c "/opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server standby-kafka:9092 \
-  --topic primary.commit-log \
-  --from-beginning \
-  --max-messages 100"
+# 🔍 Capture logs
+capture_logs
 
-# Step 8: Check logs
-echo "📄 Checking MM2 logs (expect reset detection)..."
+echo "📄 Checking for YOUR reset detection log..."
 
-docker logs mm2 --tail 100 | grep -E "RESET|RECREATED|assignment"
+if grep -q "TOPIC RESET DETECTED" "$LOG_FILE"; then
+  echo "✅ PASS: Reset detection log printed"
+  grep "TOPIC RESET DETECTED" "$LOG_FILE"
+else
+  echo "❌ FAIL: Reset detection log NOT found"
+  tail -n 100 "$LOG_FILE"
+  exit 1
+fi
 
-echo "✅ Scenario 3 completed"
+echo "📄 Checking for YOUR recovery log..."
+
+if grep -q "Recovery successful" "$LOG_FILE"; then
+  echo "✅ PASS: Recovery log printed"
+  grep "Recovery successful" "$LOG_FILE"
+else
+  echo "❌ FAIL: Recovery log NOT found"
+  tail -n 100 "$LOG_FILE"
+  exit 1
+fi
